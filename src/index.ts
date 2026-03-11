@@ -5,6 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
 import sql from 'mssql';
 import {
+  ExecuteQueryTool,
   GetTableDetailsTool,
   ListFunctionsTool,
   ListIndexesTool,
@@ -46,7 +47,8 @@ class SQLMCPServer {
       new ListProceduresTool(),
       new ListFunctionsTool(),
       new ListIndexesTool(),
-      new GetTableDetailsTool()
+      new GetTableDetailsTool(),
+      new ExecuteQueryTool()
     ];
 
     for (const tool of toolInstances) {
