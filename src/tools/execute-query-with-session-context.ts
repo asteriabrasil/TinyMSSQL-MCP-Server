@@ -35,8 +35,10 @@ export class ExecuteQueryWithSessionContextTool extends BaseSQLTool {
     return {
       name: 'execute_query_with_session_context',
       description:
-        'Execute a read-only SQL SELECT query with SQL Server session context set via sp_set_session_context. ' +
-        'Use this when the database has Row-Level Security (RLS) that requires session context variables such as TenantId.',
+        'Execute a read-only SQL SELECT query after setting arbitrary SQL Server session context ' +
+        'variables via sp_set_session_context. Use this when the database has Row-Level Security (RLS) ' +
+        'or other logic that reads SESSION_CONTEXT() variables. ' +
+        'Pass any key-value pairs needed by the target database — no keys are hardcoded.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -44,50 +46,34 @@ export class ExecuteQueryWithSessionContextTool extends BaseSQLTool {
             type: 'string',
             description: 'SQL SELECT query to execute (read-only; only SELECT statements are allowed)'
           },
-          tenantId: {
-            type: 'string',
-            description: 'Tenant GUID to set as session context TenantId (required for RLS)'
-          },
-          userId: {
-            type: 'string',
-            description: 'User GUID to set as session context UserId (optional, defaults to empty string)'
-          },
-          isAdmin: {
-            type: 'boolean',
-            description: 'Whether the user is a system admin (optional, defaults to false)'
-          },
-          isTenantAdmin: {
-            type: 'boolean',
-            description: 'Whether the user is a tenant admin (optional, defaults to false)'
-          },
-          tenantName: {
-            type: 'string',
-            description: 'Tenant name to set as session context TenantName (optional, defaults to empty string)'
+          sessionContext: {
+            type: 'object',
+            description:
+              'Key-value pairs to set as session context before executing the query. ' +
+              'All values are passed as NVARCHAR strings. ' +
+              'Example: { "TenantId": "C47B2E42-...", "UserId": "34E341D7-...", "IsAdmin": "1" }',
+            additionalProperties: { type: 'string' }
           }
         },
-        required: ['query', 'tenantId']
+        required: ['query', 'sessionContext']
       }
     };
   }
 
-  // pool parameter is kept for interface compatibility but not used here —
-  // we create a dedicated single-connection pool so that session context
-  // set via sp_set_session_context is guaranteed to be visible to the SELECT
-  // and is not affected by stale read_only context from pooled connections.
+  // pool parameter is kept for interface compatibility but not used —
+  // a dedicated single-connection pool is created per call so that session
+  // context set via sp_set_session_context is guaranteed visible to the SELECT
+  // and is not affected by stale read_only context on shared pooled connections.
   async execute(_pool: sql.ConnectionPool, args?: Record<string, any>): Promise<CallToolResult> {
     const query = args?.query as string;
-    const tenantId = args?.tenantId as string;
-    const userId = (args?.userId as string) ?? '';
-    const isAdmin = args?.isAdmin === true ? '1' : '0';
-    const isTenantAdmin = args?.isTenantAdmin === true ? '1' : '0';
-    const tenantName = (args?.tenantName as string) ?? '';
+    const sessionContext = args?.sessionContext as Record<string, string> | undefined;
 
     if (!query || !query.trim()) {
       throw new McpError(ErrorCode.InvalidParams, 'query parameter is required');
     }
 
-    if (!tenantId || !tenantId.trim()) {
-      throw new McpError(ErrorCode.InvalidParams, 'tenantId parameter is required');
+    if (!sessionContext || typeof sessionContext !== 'object' || Object.keys(sessionContext).length === 0) {
+      throw new McpError(ErrorCode.InvalidParams, 'sessionContext must be a non-empty object of key-value string pairs');
     }
 
     if (!query.trim().toUpperCase().startsWith('SELECT')) {
@@ -103,19 +89,11 @@ export class ExecuteQueryWithSessionContextTool extends BaseSQLTool {
       await transaction.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
 
       try {
-        const sessionVars: [string, string][] = [
-          ['UserId', userId],
-          ['TenantId', tenantId],
-          ['IsAdmin', isAdmin],
-          ['IsTenantAdmin', isTenantAdmin],
-          ['TenantName', tenantName]
-        ];
-
-        for (const [key, value] of sessionVars) {
+        for (const [key, value] of Object.entries(sessionContext)) {
           const req = new sql.Request(transaction);
           req.input('key', sql.NVarChar, key);
-          req.input('value', sql.NVarChar, value);
-          // Use read_only = 0 so we can set context without conflicts on fresh connections
+          req.input('value', sql.NVarChar, String(value));
+          // read_only = 0: do not lock the key so future calls on this connection can set it again
           await req.query('EXEC sp_set_session_context @key, @value, 0;');
         }
 
