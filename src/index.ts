@@ -6,6 +6,7 @@ import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } fr
 import sql from 'mssql';
 import {
   ExecuteQueryTool,
+  ExecuteQueryWithSessionContextTool,
   GetTableDetailsTool,
   ListFunctionsTool,
   ListIndexesTool,
@@ -48,7 +49,8 @@ class SQLMCPServer {
       new ListFunctionsTool(),
       new ListIndexesTool(),
       new GetTableDetailsTool(),
-      new ExecuteQueryTool()
+      new ExecuteQueryTool(),
+      new ExecuteQueryWithSessionContextTool()
     ];
 
     for (const tool of toolInstances) {
